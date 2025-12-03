@@ -21,7 +21,7 @@ Interactive orthographic projection of high-dimensional cubes and simplices, rew
 | Reset active plane angle | `/` |
 | Reset all angles | `R` |
 | Restore defaults | `Esc` |
-| Pan viewport | `W`/`A`/`S`/`D`, on-canvas pad, or touch dragging |
+| Pan viewport | `W`/`A`/`S`/`D` or on-canvas pad |
 | Zoom viewport | Mouse wheel (canvas focused) or +/- on-canvas buttons |
 
 > On touch devices, use the on-screen buttons (Shape </>, N +/-, Plane </>, Rotate </>, Zero, Reset, Defaults) beneath the canvas plus the left pad (pan) and right +/- buttons (zoom) that sit on top of the canvas to trigger the same actions without a keyboard.
