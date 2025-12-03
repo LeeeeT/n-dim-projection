@@ -98,13 +98,13 @@
       .controls {
         width: 100%;
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-        gap: 8px;
+        grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+        gap: 6px;
       }
       .controls button {
         font: inherit;
-        padding: 10px 14px;
-        border-radius: 10px;
+        padding: 8px 12px;
+        border-radius: 8px;
         border: 1px solid #27304b;
         background: #12182b;
         color: var(--hud-text);
@@ -538,11 +538,9 @@
           const angle = state.angles[state.selectedPlaneIdx] || 0;
           const angleDeg = ((angle * 180) / Math.PI + 360) % 360;
           lines.push(`Plane ${state.selectedPlaneIdx + 1}/${state.planes.length}: (${plane[0]}, ${plane[1]})  angle=${angleDeg.toFixed(1)}°`);
-          lines.push(
-            state.touchMode
-              ? "Plane < or > select  hold rotate buttons to spin  Zero/Reset for cleanup"
-              : "↑/↓ plane  hold ←/→ rotate  / zero  R reset all"
-          );
+          if (!state.touchMode) {
+            lines.push("↑/↓ plane  hold ←/→ rotate  / zero  R reset all");
+          }
         } else {
           lines.push("No rotation planes available for this dimension.");
         }
