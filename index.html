@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>N-Dimensional Projection</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #05060b;
+        --panel: #080a12;
+        --hud-text: #ced7ff;
+        --hud-muted: #8090c8;
+        font-family: "Consolas", "SFMono-Regular", "Fira Code", monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at top, #0b0f1f 0%, var(--bg) 60%);
+        color: var(--hud-text);
+      }
+      .app {
+        position: relative;
+        padding: 16px;
+      }
+      canvas {
+        display: block;
+        background: #080a12;
+        border-radius: 12px;
+        border: 1px solid #141826;
+        box-shadow: 0 20px 45px rgba(0, 0, 0, 0.55);
+      }
+      #hud {
+        position: absolute;
+        top: 28px;
+        left: 42px;
+        pointer-events: none;
+        font-size: 14px;
+        line-height: 1.45;
+        text-shadow: 0 0 8px rgba(0, 0, 0, 0.65);
+      }
+      #hud div {
+        white-space: nowrap;
+      }
+      @media (max-width: 1100px) {
+        body {
+          transform: scale(0.85);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <canvas id="projection" width="960" height="720"></canvas>
+      <div id="hud"></div>
+    </div>
+    <script>
+      const CONFIG = {
+        screenWidth: 960,
+        screenHeight: 720,
+        edgeColor: [200, 220, 255],
+        pointColor: [255, 170, 0],
+        background: "#080a12",
+        cubeBaseScale: 140,
+        simplexBaseScale: 300,
+        manualRotationSpeed: 1.6,
+        shapes: ["cube", "simplex"],
+      };
+
+      const state = {
+        shapeIndex: 0,
+        dimensionSetting: 3,
+        polytope: null,
+        dimension: 0,
+        planes: [],
+        angles: [],
+        projectionMatrix: null,
+        renderScale: 1,
+        selectedPlaneIdx: 0,
+        keyState: new Set(),
+        lastTime: performance.now(),
+      };
+
+      const canvas = document.getElementById("projection");
+      const ctx = canvas.getContext("2d");
+      const hud = document.getElementById("hud");
+
+      function canonicalShapeName(name) {
+        return name === "tetra" ? "simplex" : name;
+      }
+
+      function dot(a, b) {
+        let sum = 0;
+        for (let i = 0; i < a.length; i++) sum += a[i] * b[i];
+        return sum;
+      }
+
+      function gramSchmidt(vectors, targetDim) {
+        const basis = [];
+        for (const vector of vectors) {
+          const w = vector.slice();
+          for (const axis of basis) {
+            const proj = dot(w, axis);
+            for (let i = 0; i < w.length; i++) w[i] -= proj * axis[i];
+          }
+          const norm = Math.hypot(...w);
+          if (norm <= 1e-9) continue;
+          basis.push(w.map((value) => value / norm));
+          if (basis.length === targetDim) break;
+        }
+        if (basis.length < targetDim) {
+          throw new Error("Unable to construct orthonormal basis for simplex");
+        }
+        return basis;
+      }
+
+      function generateNCube(dimension) {
+        const dim = Math.max(2, dimension);
+        const vertexCount = 1 << dim;
+        const vertices = new Array(vertexCount);
+        for (let i = 0; i < vertexCount; i++) {
+          const coords = new Array(dim);
+          for (let bit = 0; bit < dim; bit++) {
+            coords[bit] = i & (1 << bit) ? 1 : -1;
+          }
+          vertices[i] = coords;
+        }
+        const edges = [];
+        for (let i = 0; i < vertexCount; i++) {
+          for (let bit = 0; bit < dim; bit++) {
+            if ((i & (1 << bit)) === 0) {
+              edges.push([i, i | (1 << bit)]);
+            }
+          }
+        }
+        return { vertices, edges, dim };
+      }
+
+      function generateRegularSimplex(dimension) {
+        const dim = Math.max(2, dimension);
+        const count = dim + 1;
+        const centroid = 1 / count;
+        const rawVertices = [];
+        for (let i = 0; i < count; i++) {
+          const vec = new Array(count).fill(0);
+          vec[i] = 1;
+          rawVertices.push(vec.map((value) => value - centroid));
+        }
+        const basis = gramSchmidt(rawVertices.slice(0, -1), dim);
+        const vertices = rawVertices.map((vec) => basis.map((axis) => dot(vec, axis)));
+        const edges = [];
+        for (let i = 0; i < count; i++) {
+          for (let j = i + 1; j < count; j++) edges.push([i, j]);
+        }
+        return { vertices, edges, dim };
+      }
+
+      function buildPolytope(shapeName, dimension) {
+        const canonical = canonicalShapeName(shapeName);
+        if (canonical === "cube") {
+          const { vertices, edges, dim } = generateNCube(dimension);
+          return { name: `${dim}D cube`, dimension: dim, vertices, edges };
+        }
+        if (canonical === "simplex") {
+          const { vertices, edges, dim } = generateRegularSimplex(dimension);
+          return { name: `${dim}-simplex`, dimension: dim, vertices, edges };
+        }
+        throw new Error(`Unsupported shape '${shapeName}'`);
+      }
+
+      function buildRotationPlanes(dimension) {
+        const planes = [];
+        for (let i = 0; i < dimension; i++) {
+          for (let j = i + 1; j < dimension; j++) planes.push([i, j]);
+        }
+        return planes;
+      }
+
+      function rotatePoint(point, planes, angles) {
+        const coords = point.slice();
+        for (let idx = 0; idx < planes.length; idx++) {
+          const angle = angles[idx];
+          if (!angle) continue;
+          const [i, j] = planes[idx];
+          const c = Math.cos(angle);
+          const s = Math.sin(angle);
+          const ci = coords[i] * c - coords[j] * s;
+          const cj = coords[i] * s + coords[j] * c;
+          coords[i] = ci;
+          coords[j] = cj;
+        }
+        return coords;
+      }
+
+      function buildProjectionMatrix(dimension) {
+        if (dimension === 1) return [[1], [0]];
+        if (dimension === 2)
+          return [
+            [1, 0],
+            [0, 1],
+          ];
+        const rowX = [];
+        const rowY = [];
+        const normalization = Math.sqrt(dimension);
+        for (let idx = 0; idx < dimension; idx++) {
+          const theta = (2 * Math.PI * idx) / dimension;
+          rowX.push(Math.cos(theta) / normalization);
+          rowY.push(Math.sin(theta) / normalization);
+        }
+        return [rowX, rowY];
+      }
+
+      function projectPoint(point, matrix) {
+        let x = 0;
+        let y = 0;
+        for (let d = 0; d < point.length; d++) {
+          x += point[d] * matrix[0][d];
+          y += point[d] * matrix[1][d];
+        }
+        return [x, y];
+      }
+
+      function toScreen(point, scale) {
+        const halfW = CONFIG.screenWidth / 2;
+        const halfH = CONFIG.screenHeight / 2;
+        return [halfW + point[0] * scale, halfH + point[1] * scale];
+      }
+
+      function depthValue(point) {
+        if (point.length <= 2) return point.length ? point[point.length - 1] : 0;
+        const tail = point.slice(2);
+        return tail.reduce((sum, value) => sum + value, 0) / tail.length;
+      }
+
+      function computeScale(dimension, shapeName) {
+        const dimValue = Math.max(2, dimension);
+        const canonical = canonicalShapeName(shapeName);
+        if (canonical === "simplex") {
+          return CONFIG.simplexBaseScale * Math.sqrt(dimValue / 3);
+        }
+        return CONFIG.cubeBaseScale * Math.sqrt(4 / dimValue);
+      }
+
+      function rebuildState() {
+        const shapeName = CONFIG.shapes[state.shapeIndex];
+        const polytope = buildPolytope(shapeName, state.dimensionSetting);
+        const planes = buildRotationPlanes(polytope.dimension);
+        state.polytope = polytope;
+        state.dimension = polytope.dimension;
+        state.planes = planes;
+        state.angles = new Array(planes.length).fill(0);
+        state.projectionMatrix = buildProjectionMatrix(polytope.dimension);
+        state.renderScale = computeScale(polytope.dimension, shapeName);
+        state.selectedPlaneIdx = planes.length ? Math.min(state.selectedPlaneIdx, planes.length - 1) : 0;
+      }
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function adjustShape(delta) {
+        state.shapeIndex = (state.shapeIndex + delta + CONFIG.shapes.length) % CONFIG.shapes.length;
+        rebuildState();
+      }
+
+      function adjustDimension(delta) {
+        state.dimensionSetting = Math.max(2, state.dimensionSetting + delta);
+        rebuildState();
+      }
+
+      function resetToDefaults() {
+        state.shapeIndex = 0;
+        state.dimensionSetting = 3;
+        rebuildState();
+      }
+
+      function handleKeyDown(event) {
+        const key = event.key;
+        const needsPrevent = ["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key);
+        if (needsPrevent) event.preventDefault();
+        if (key === "Tab") {
+          const delta = event.shiftKey ? -1 : 1;
+          adjustShape(delta);
+          return;
+        }
+        if (key === "-") {
+          adjustDimension(-1);
+          return;
+        }
+        if (key === "=" || key === "+") {
+          adjustDimension(1);
+          return;
+        }
+        if (key === "Escape") {
+          resetToDefaults();
+          return;
+        }
+        if (!state.planes.length) return;
+        if (key === "ArrowUp") {
+          state.selectedPlaneIdx = (state.selectedPlaneIdx + 1) % state.planes.length;
+        } else if (key === "ArrowDown") {
+          state.selectedPlaneIdx = (state.selectedPlaneIdx - 1 + state.planes.length) % state.planes.length;
+        } else if (key === "/" || key === "?") {
+          state.angles[state.selectedPlaneIdx] = 0;
+        } else if (key === "r" || key === "R") {
+          state.angles.fill(0);
+        }
+      }
+
+      function handleKeyChange(event, isDown) {
+        const tracked = new Set(["ArrowLeft", "ArrowRight"]);
+        if (tracked.has(event.key)) {
+          if (isDown) {
+            state.keyState.add(event.key);
+          } else {
+            state.keyState.delete(event.key);
+          }
+        }
+      }
+
+      window.addEventListener("keydown", (event) => {
+        handleKeyDown(event);
+        handleKeyChange(event, true);
+      });
+      window.addEventListener("keyup", (event) => handleKeyChange(event, false));
+      window.addEventListener("blur", () => state.keyState.clear());
+
+      function update(dt) {
+        if (!state.planes.length) return;
+        const increment = CONFIG.manualRotationSpeed * dt;
+        if (state.keyState.has("ArrowLeft")) {
+          state.angles[state.selectedPlaneIdx] = (state.angles[state.selectedPlaneIdx] - increment) % (Math.PI * 2);
+        }
+        if (state.keyState.has("ArrowRight")) {
+          state.angles[state.selectedPlaneIdx] = (state.angles[state.selectedPlaneIdx] + increment) % (Math.PI * 2);
+        }
+      }
+
+      function renderHud() {
+        const lines = [
+          `shape ${state.shapeIndex + 1}/${CONFIG.shapes.length} = ${state.polytope.name}`,
+          `N=${state.dimension}  vertices=${state.polytope.vertices.length}  planes=${state.planes.length}`,
+          "TAB next  Shift+TAB prev  -/= change N",
+        ];
+        if (state.planes.length) {
+          const plane = state.planes[state.selectedPlaneIdx];
+          const angle = state.angles[state.selectedPlaneIdx] || 0;
+          const angleDeg = ((angle * 180) / Math.PI + 360) % 360;
+          lines.push(`Plane ${state.selectedPlaneIdx + 1}/${state.planes.length}: (${plane[0]}, ${plane[1]})  angle=${angleDeg.toFixed(1)}°`);
+          lines.push("↑/↓ plane  hold ←/→ rotate  / zero  R reset all");
+        } else {
+          lines.push("No rotation planes available for this dimension.");
+        }
+        hud.innerHTML = lines.map((line) => `<div>${line}</div>`).join("");
+      }
+
+      function drawScene() {
+        ctx.fillStyle = CONFIG.background;
+        ctx.fillRect(0, 0, CONFIG.screenWidth, CONFIG.screenHeight);
+        if (!state.polytope) return;
+        const rotated = state.polytope.vertices.map((vertex) => rotatePoint(vertex, state.planes, state.angles));
+        const projected = rotated.map((vertex) => toScreen(projectPoint(vertex, state.projectionMatrix), state.renderScale));
+        const depths = rotated.map((vertex) => depthValue(vertex));
+
+        const edgeDepth = (edge) => (depths[edge[0]] + depths[edge[1]]) / 2;
+        const sortedEdges = state.polytope.edges.slice().sort((a, b) => edgeDepth(a) - edgeDepth(b));
+
+        ctx.lineWidth = 2;
+        ctx.lineCap = "round";
+
+        for (const edge of sortedEdges) {
+          const depth = edgeDepth(edge);
+          const shade = clamp((depth + 2) / 4, 0, 1);
+          const color = CONFIG.edgeColor.map((component) => Math.round(component * shade));
+          ctx.strokeStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+          const start = projected[edge[0]];
+          const end = projected[edge[1]];
+          ctx.beginPath();
+          ctx.moveTo(start[0], start[1]);
+          ctx.lineTo(end[0], end[1]);
+          ctx.stroke();
+        }
+
+        for (let i = 0; i < projected.length; i++) {
+          const depth = depths[i];
+          const shade = clamp((depth + 2) / 4, 0, 1);
+          const color = CONFIG.pointColor.map((component) => Math.round(component * shade));
+          ctx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+          const [x, y] = projected[i];
+          ctx.beginPath();
+          ctx.arc(x, y, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        renderHud();
+      }
+
+      function loop(timestamp) {
+        const dt = (timestamp - state.lastTime) / 1000;
+        state.lastTime = timestamp;
+        update(dt);
+        drawScene();
+        requestAnimationFrame(loop);
+      }
+
+      rebuildState();
+      renderHud();
+      requestAnimationFrame((ts) => {
+        state.lastTime = ts;
+        loop(ts);
+      });
+    </script>
+  </body>
+</html>
