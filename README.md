@@ -1,7 +1,5 @@
 # N-Dimensional Projection Viewer
 
-Interactive orthographic projection of high-dimensional cubes and simplices, rewritten for the web. The viewer now renders polytopes with a WebGL pipeline (falling back to Canvas 2D when needed) plus per-plane manual rotations and HUD guidance so you can explore geometric relationships across dimensions right in your browser. A Rust-powered WebAssembly module accelerates the heavy rotation/projection math while the existing JavaScript path remains as a fallback.
-
 ## Features
 - **Shape switching** between N-cubes, N-simplices, and N-orthoplexes (cross polytopes) so you can explore dual families.
 - **Manual plane control**: iterate through rotation planes and hold the arrow keys to rotate in real-time.
@@ -61,3 +59,4 @@ projection/
 ```
 
 Feel free to customise the styles, extend with additional shapes, or integrate with other hosting setups. Contributions welcome!
+
