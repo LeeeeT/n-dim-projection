@@ -222,7 +222,7 @@
         cubeBaseScale: 140,
         simplexBaseScale: 300,
         manualRotationSpeed: 1.6,
-        shapes: ["cube", "simplex"],
+        shapes: ["cube", "simplex", "orthoplex"],
       };
 
       const BASE_CANVAS_WIDTH = 960;
@@ -254,6 +254,7 @@
       const wasmSupport = {
         ready: false,
         rotate: null,
+        buildShape: null,
       };
 
       const state = {
@@ -398,17 +399,107 @@
         return { vertices, edges, dim, vertexCount: count };
       }
 
+      function generateOrthoplex(dimension) {
+        const dim = Math.max(2, dimension);
+        const vertexCount = dim * 2;
+        const vertices = new Float32Array(vertexCount * dim);
+        const edges = [];
+        for (let axis = 0; axis < dim; axis++) {
+          const posIdx = axis * 2;
+          const negIdx = axis * 2 + 1;
+          for (let d = 0; d < dim; d++) {
+            vertices[posIdx * dim + d] = d === axis ? 1 : 0;
+            vertices[negIdx * dim + d] = d === axis ? -1 : 0;
+          }
+        }
+        for (let i = 0; i < vertexCount; i++) {
+          for (let j = i + 1; j < vertexCount; j++) {
+            const axisI = Math.floor(i / 2);
+            const axisJ = Math.floor(j / 2);
+            if (axisI !== axisJ) {
+              edges.push([i, j]);
+            }
+          }
+        }
+        return { vertices, edges, dim, vertexCount };
+      }
+
       function buildPolytope(shapeName, dimension) {
         const canonical = canonicalShapeName(shapeName);
+        if (wasmSupport.ready && typeof wasmSupport.buildShape === "function") {
+          try {
+            return buildPolytopeFromWasm(canonical, dimension);
+          } catch (error) {
+            console.warn("Falling back to JS shape builder", error);
+          }
+        }
+        return buildPolytopeFallback(canonical, dimension);
+      }
+
+      function buildPolytopeFallback(canonical, dimensionSetting) {
         if (canonical === "cube") {
-          const { vertices, edges, dim, vertexCount } = generateNCube(dimension);
-          return { name: `${dim}D cube`, dimension: dim, vertexCount, vertices, edges };
+          const data = generateNCube(dimensionSetting);
+          return enrichFallbackPolytope(data.dim, `${data.dim}D cube`, data);
         }
         if (canonical === "simplex") {
-          const { vertices, edges, dim, vertexCount } = generateRegularSimplex(dimension);
-          return { name: `${dim}-simplex`, dimension: dim, vertexCount, vertices, edges };
+          const data = generateRegularSimplex(dimensionSetting);
+          return enrichFallbackPolytope(data.dim, `${data.dim}-simplex`, data);
         }
-        throw new Error(`Unsupported shape '${shapeName}'`);
+        if (canonical === "orthoplex") {
+          const data = generateOrthoplex(dimensionSetting);
+          return enrichFallbackPolytope(data.dim, `${data.dim}D orthoplex`, data);
+        }
+        throw new Error(`Unsupported shape '${canonical}'`);
+      }
+
+      function enrichFallbackPolytope(dim, name, data) {
+        const edgeIndices = buildEdgeIndexArray(data.edges);
+        return {
+          name,
+          dimension: dim,
+          vertexCount: data.vertexCount,
+          vertices: data.vertices,
+          edges: data.edges,
+          edgeIndices,
+        };
+      }
+
+      function buildPolytopeFromWasm(canonical, dimensionSetting) {
+        const shape = wasmSupport.buildShape(canonical, dimensionSetting);
+        const vertices = shape.vertices();
+        const edgeIndices = shape.edges();
+        const edges = edgePairsFromIndices(edgeIndices);
+        return {
+          name: formatPolytopeName(canonical, shape.dimension),
+          dimension: shape.dimension,
+          vertexCount: shape.vertex_count,
+          vertices,
+          edges,
+          edgeIndices,
+        };
+      }
+
+      function formatPolytopeName(canonical, dimension) {
+        if (canonical === "simplex") return `${dimension}-simplex`;
+        if (canonical === "orthoplex") return `${dimension}D orthoplex`;
+        return `${dimension}D cube`;
+      }
+
+      function edgePairsFromIndices(indexArray) {
+        const pairs = new Array(Math.floor(indexArray.length / 2));
+        for (let i = 0; i < indexArray.length; i += 2) {
+          pairs[i / 2] = [indexArray[i], indexArray[i + 1]];
+        }
+        return pairs;
+      }
+
+      function buildEdgeIndexArray(edges) {
+        const typed = new Uint32Array(edges.length * 2);
+        for (let i = 0; i < edges.length; i++) {
+          typed[i * 2] = edges[i][0];
+          typed[i * 2 + 1] = edges[i][1];
+        }
+        return typed;
       }
 
       function buildRotationPlanes(dimension) {
@@ -483,7 +574,7 @@
         state.renderScale = computeScale(polytope.dimension, shapeName) * viewportScaleFactor() * state.zoom;
         state.selectedPlaneIdx = pairs.length ? Math.min(state.selectedPlaneIdx, pairs.length - 1) : 0;
         if (glResources) {
-          uploadEdgeIndices(glResources, polytope.edges, state.vertexCount);
+          uploadEdgeIndices(glResources, polytope.edgeIndices, state.vertexCount);
         }
         updateControlStates();
       }
@@ -908,27 +999,35 @@
         return shader;
       }
 
-      function uploadEdgeIndices(resources, edges, vertexCount) {
+      function uploadEdgeIndices(resources, source, vertexCount) {
         const { gl, supportsUint32, edgeIndexBuffer } = resources;
-        if (!edges.length) {
+        if (!source || source.length === 0) {
           resources.indexCount = 0;
           return;
         }
-        const maxIndex = vertexCount - 1;
-        const useUint32 = supportsUint32 && maxIndex > 65535;
-        if (maxIndex > 65535 && !useUint32) {
-          console.warn("WebGL implementation lacks Uint32 indices; edges beyond 65k vertices may be truncated.");
+        let typed;
+        if (source instanceof Uint16Array || source instanceof Uint32Array) {
+          typed = source;
+        } else {
+          typed = buildEdgeIndexArray(source);
         }
-        const IndexArray = useUint32 ? Uint32Array : Uint16Array;
-        const typed = new IndexArray(edges.length * 2);
-        for (let i = 0; i < edges.length; i++) {
-          typed[i * 2] = edges[i][0];
-          typed[i * 2 + 1] = edges[i][1];
+        let indexType = gl.UNSIGNED_SHORT;
+        if (typed instanceof Uint32Array) {
+          if (supportsUint32) {
+            indexType = gl.UNSIGNED_INT;
+          } else {
+            if (vertexCount - 1 > 65535) {
+              console.warn("WebGL implementation lacks Uint32 indices; edges beyond 65k vertices may be truncated.");
+            }
+            const converted = new Uint16Array(typed.length);
+            converted.set(typed);
+            typed = converted;
+          }
         }
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, edgeIndexBuffer);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, typed, gl.STATIC_DRAW);
         resources.indexCount = typed.length;
-        resources.indexType = useUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+        resources.indexType = indexType;
       }
 
       function resizeCanvas() {
