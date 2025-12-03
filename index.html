@@ -220,7 +220,8 @@
         pointColor: [255, 170, 0],
         background: "#080a12",
         cubeBaseScale: 140,
-        simplexBaseScale: 300,
+        simplexBaseScale: 350,
+        orthoplexBaseScale: 300,
         manualRotationSpeed: 1.6,
         shapes: ["cube", "simplex", "orthoplex"],
       };
@@ -546,6 +547,9 @@
         const canonical = canonicalShapeName(shapeName);
         if (canonical === "simplex") {
           return CONFIG.simplexBaseScale * Math.sqrt(dimValue / 3);
+        }
+        if (canonical === "orthoplex") {
+          return CONFIG.orthoplexBaseScale * Math.sqrt(dimValue / 3);
         }
         return CONFIG.cubeBaseScale * Math.sqrt(4 / dimValue);
       }
