@@ -22,45 +22,148 @@
         display: flex;
         align-items: center;
         justify-content: center;
+        padding: 16px;
         background: radial-gradient(circle at top, #0b0f1f 0%, var(--bg) 60%);
         color: var(--hud-text);
       }
+      .title {
+        margin: 0 0 4px;
+        font-size: clamp(1.5rem, 3vw, 2.2rem);
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
       .app {
+        width: min(960px, 100%);
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        align-items: center;
+      }
+      .canvas-shell {
+        width: 100%;
         position: relative;
-        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .canvas-toolbar {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .canvas-btn {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        border: 1px solid #27304b;
+        background: rgba(8, 12, 25, 0.85);
+        color: var(--hud-text);
+        font-size: 1.1rem;
+        cursor: pointer;
+        backdrop-filter: blur(4px);
+        transition: transform 0.1s ease, background 0.2s ease;
+      }
+      .canvas-btn:active {
+        transform: scale(0.96);
+        background: rgba(14, 19, 34, 0.95);
       }
       canvas {
         display: block;
+        width: 100%;
+        max-width: 960px;
+        aspect-ratio: 4 / 3;
+        height: auto;
         background: #080a12;
         border-radius: 12px;
         border: 1px solid #141826;
         box-shadow: 0 20px 45px rgba(0, 0, 0, 0.55);
       }
       #hud {
-        position: absolute;
-        top: 28px;
-        left: 42px;
-        pointer-events: none;
+        padding: 12px 16px;
+        border-radius: 10px;
+        border: 1px solid #141826;
+        background: rgba(5, 6, 11, 0.8);
         font-size: 14px;
         line-height: 1.45;
-        text-shadow: 0 0 8px rgba(0, 0, 0, 0.65);
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
       }
       #hud div {
         white-space: nowrap;
       }
-      @media (max-width: 1100px) {
+      .controls {
+        width: 100%;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 8px;
+      }
+      .controls button {
+        font: inherit;
+        padding: 10px 14px;
+        border-radius: 10px;
+        border: 1px solid #27304b;
+        background: #12182b;
+        color: var(--hud-text);
+        cursor: pointer;
+        transition: transform 0.1s ease, background 0.2s ease;
+      }
+      .controls button:active,
+      .controls button.active {
+        transform: translateY(1px);
+        background: #1c2440;
+      }
+      .controls button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      @media (max-width: 640px) {
         body {
-          transform: scale(0.85);
+          padding: 12px;
+        }
+        #hud {
+          font-size: 12px;
+          padding: 10px 12px;
+        }
+        .canvas-toolbar {
+          top: 10px;
+          right: 10px;
+          gap: 6px;
+        }
+        .canvas-btn {
+          width: 34px;
+          height: 34px;
         }
       }
     </style>
   </head>
   <body>
     <div class="app">
-      <canvas id="projection" width="960" height="720"></canvas>
-      <div id="hud"></div>
+      <h1 class="title">N-Dimensional Projection</h1>
+      <div class="canvas-shell">
+        <canvas id="projection" width="960" height="720"></canvas>
+        <div class="canvas-toolbar" aria-label="Canvas controls">
+          <button class="canvas-btn" data-action="zoom-in" title="Zoom in">+</button>
+          <button class="canvas-btn" data-action="zoom-out" title="Zoom out">-</button>
+        </div>
+        <div id="hud"></div>
+      </div>
+      <div class="controls" aria-label="Controls">
+        <button data-action="shape-prev">Shape &lt;</button>
+        <button data-action="shape-next">Shape &gt;</button>
+        <button data-action="dimension-dec">N -</button>
+        <button data-action="dimension-inc">N +</button>
+        <button data-action="plane-prev">Plane &lt;</button>
+        <button data-action="plane-next">Plane &gt;</button>
+        <button data-action="rotate-left">Rotate &lt;</button>
+        <button data-action="rotate-right">Rotate &gt;</button>
+        <button data-action="plane-zero">Zero plane</button>
+        <button data-action="reset-angles">Reset angles</button>
+        <button data-action="reset-defaults">Defaults</button>
+      </div>
     </div>
-    <script>
+    <script type="module">
       const CONFIG = {
         screenWidth: 960,
         screenHeight: 720,
@@ -73,23 +176,80 @@
         shapes: ["cube", "simplex"],
       };
 
+      const BASE_CANVAS_WIDTH = 960;
+      const BASE_CANVAS_HEIGHT = 720;
+      const buttonRefs = {};
+      const rotationButtonBindings = [];
+      const pointerQuery = window.matchMedia ? window.matchMedia("(pointer: coarse)") : null;
+
+      const ACTION_HANDLERS = {
+        "shape-prev": () => adjustShape(-1),
+        "shape-next": () => adjustShape(1),
+        "dimension-dec": () => adjustDimension(-1),
+        "dimension-inc": () => adjustDimension(1),
+        "plane-prev": () => cyclePlane(-1),
+        "plane-next": () => cyclePlane(1),
+        "plane-zero": () => zeroSelectedPlane(),
+        "reset-angles": () => resetAllAngles(),
+        "reset-defaults": () => resetToDefaults(),
+        "zoom-in": () => adjustZoom(1.15),
+        "zoom-out": () => adjustZoom(1 / 1.15),
+      };
+      const ZOOM_BOUNDS = { min: 0.35, max: 4 };
+
+      const wasmSupport = {
+        ready: false,
+        rotate: null,
+      };
+
       const state = {
         shapeIndex: 0,
         dimensionSetting: 3,
         polytope: null,
         dimension: 0,
+        vertexCount: 0,
         planes: [],
-        angles: [],
-        projectionMatrix: null,
+        planesFlat: new Uint32Array(),
+        angles: new Float32Array(),
+        projectionMatrix: new Float32Array(),
         renderScale: 1,
         selectedPlaneIdx: 0,
         keyState: new Set(),
         lastTime: performance.now(),
+        touchMode: pointerQuery ? pointerQuery.matches : false,
+        zoom: 1,
       };
 
       const canvas = document.getElementById("projection");
-      const ctx = canvas.getContext("2d");
+      const gl = canvas.getContext("webgl2", { antialias: true }) || canvas.getContext("webgl", { antialias: true });
+      const ctx = gl ? null : canvas.getContext("2d");
+      const glResources = gl ? initWebGL(gl) : null;
       const hud = document.getElementById("hud");
+
+      if (pointerQuery) {
+        const handlePointerChange = (event) => {
+          state.touchMode = event.matches;
+          renderHud();
+        };
+        if (typeof pointerQuery.addEventListener === "function") {
+          pointerQuery.addEventListener("change", handlePointerChange);
+        } else if (typeof pointerQuery.addListener === "function") {
+          pointerQuery.addListener(handlePointerChange);
+        }
+      }
+
+      setupButtonControls();
+      resizeCanvas();
+      let resizeQueued = false;
+      window.addEventListener("resize", () => {
+        if (!resizeQueued) {
+          resizeQueued = true;
+          requestAnimationFrame(() => {
+            resizeQueued = false;
+            resizeCanvas();
+          });
+        }
+      });
 
       function canonicalShapeName(name) {
         return name === "tetra" ? "simplex" : name;
@@ -123,13 +283,11 @@
       function generateNCube(dimension) {
         const dim = Math.max(2, dimension);
         const vertexCount = 1 << dim;
-        const vertices = new Array(vertexCount);
+        const vertices = new Float32Array(vertexCount * dim);
         for (let i = 0; i < vertexCount; i++) {
-          const coords = new Array(dim);
           for (let bit = 0; bit < dim; bit++) {
-            coords[bit] = i & (1 << bit) ? 1 : -1;
+            vertices[i * dim + bit] = i & (1 << bit) ? 1 : -1;
           }
-          vertices[i] = coords;
         }
         const edges = [];
         for (let i = 0; i < vertexCount; i++) {
@@ -139,7 +297,7 @@
             }
           }
         }
-        return { vertices, edges, dim };
+        return { vertices, edges, dim, vertexCount };
       }
 
       function generateRegularSimplex(dimension) {
@@ -153,89 +311,70 @@
           rawVertices.push(vec.map((value) => value - centroid));
         }
         const basis = gramSchmidt(rawVertices.slice(0, -1), dim);
-        const vertices = rawVertices.map((vec) => basis.map((axis) => dot(vec, axis)));
+        const vertices = new Float32Array(count * dim);
+        for (let idx = 0; idx < count; idx++) {
+          const coords = basis.map((axis) => dot(rawVertices[idx], axis));
+          for (let d = 0; d < dim; d++) {
+            vertices[idx * dim + d] = coords[d];
+          }
+        }
         const edges = [];
         for (let i = 0; i < count; i++) {
           for (let j = i + 1; j < count; j++) edges.push([i, j]);
         }
-        return { vertices, edges, dim };
+        return { vertices, edges, dim, vertexCount: count };
       }
 
       function buildPolytope(shapeName, dimension) {
         const canonical = canonicalShapeName(shapeName);
         if (canonical === "cube") {
-          const { vertices, edges, dim } = generateNCube(dimension);
-          return { name: `${dim}D cube`, dimension: dim, vertices, edges };
+          const { vertices, edges, dim, vertexCount } = generateNCube(dimension);
+          return { name: `${dim}D cube`, dimension: dim, vertexCount, vertices, edges };
         }
         if (canonical === "simplex") {
-          const { vertices, edges, dim } = generateRegularSimplex(dimension);
-          return { name: `${dim}-simplex`, dimension: dim, vertices, edges };
+          const { vertices, edges, dim, vertexCount } = generateRegularSimplex(dimension);
+          return { name: `${dim}-simplex`, dimension: dim, vertexCount, vertices, edges };
         }
         throw new Error(`Unsupported shape '${shapeName}'`);
       }
 
       function buildRotationPlanes(dimension) {
-        const planes = [];
+        const pairs = [];
+        const planeCount = (dimension * (dimension - 1)) / 2;
+        const flat = new Uint32Array(planeCount * 2);
+        let offset = 0;
         for (let i = 0; i < dimension; i++) {
-          for (let j = i + 1; j < dimension; j++) planes.push([i, j]);
+          for (let j = i + 1; j < dimension; j++) {
+            pairs.push([i, j]);
+            flat[offset++] = i;
+            flat[offset++] = j;
+          }
         }
-        return planes;
-      }
-
-      function rotatePoint(point, planes, angles) {
-        const coords = point.slice();
-        for (let idx = 0; idx < planes.length; idx++) {
-          const angle = angles[idx];
-          if (!angle) continue;
-          const [i, j] = planes[idx];
-          const c = Math.cos(angle);
-          const s = Math.sin(angle);
-          const ci = coords[i] * c - coords[j] * s;
-          const cj = coords[i] * s + coords[j] * c;
-          coords[i] = ci;
-          coords[j] = cj;
-        }
-        return coords;
+        return { pairs, flat };
       }
 
       function buildProjectionMatrix(dimension) {
-        if (dimension === 1) return [[1], [0]];
-        if (dimension === 2)
-          return [
-            [1, 0],
-            [0, 1],
-          ];
-        const rowX = [];
-        const rowY = [];
-        const normalization = Math.sqrt(dimension);
-        for (let idx = 0; idx < dimension; idx++) {
-          const theta = (2 * Math.PI * idx) / dimension;
-          rowX.push(Math.cos(theta) / normalization);
-          rowY.push(Math.sin(theta) / normalization);
+        const dim = Math.max(1, dimension);
+        const matrix = new Float32Array(dim * 2);
+        if (dim === 1) {
+          matrix[0] = 1;
+          matrix[1] = 0;
+          return matrix;
         }
-        return [rowX, rowY];
-      }
-
-      function projectPoint(point, matrix) {
-        let x = 0;
-        let y = 0;
-        for (let d = 0; d < point.length; d++) {
-          x += point[d] * matrix[0][d];
-          y += point[d] * matrix[1][d];
+        if (dim === 2) {
+          matrix[0] = 1;
+          matrix[1] = 0;
+          matrix[2] = 0;
+          matrix[3] = 1;
+          return matrix;
         }
-        return [x, y];
-      }
-
-      function toScreen(point, scale) {
-        const halfW = CONFIG.screenWidth / 2;
-        const halfH = CONFIG.screenHeight / 2;
-        return [halfW + point[0] * scale, halfH + point[1] * scale];
-      }
-
-      function depthValue(point) {
-        if (point.length <= 2) return point.length ? point[point.length - 1] : 0;
-        const tail = point.slice(2);
-        return tail.reduce((sum, value) => sum + value, 0) / tail.length;
+        const normalization = Math.sqrt(dim);
+        for (let idx = 0; idx < dim; idx++) {
+          const theta = (2 * Math.PI * idx) / dim;
+          matrix[idx] = Math.cos(theta) / normalization;
+          matrix[dim + idx] = Math.sin(theta) / normalization;
+        }
+        return matrix;
       }
 
       function computeScale(dimension, shapeName) {
@@ -247,17 +386,33 @@
         return CONFIG.cubeBaseScale * Math.sqrt(4 / dimValue);
       }
 
+      function viewportScaleFactor() {
+        return CONFIG.screenWidth / BASE_CANVAS_WIDTH;
+      }
+
+      function updateRenderScaleForViewport() {
+        if (!state.polytope) return;
+        const shapeName = CONFIG.shapes[state.shapeIndex];
+        state.renderScale = computeScale(state.dimension, shapeName) * viewportScaleFactor() * state.zoom;
+      }
+
       function rebuildState() {
         const shapeName = CONFIG.shapes[state.shapeIndex];
         const polytope = buildPolytope(shapeName, state.dimensionSetting);
-        const planes = buildRotationPlanes(polytope.dimension);
+        const { pairs, flat } = buildRotationPlanes(polytope.dimension);
         state.polytope = polytope;
         state.dimension = polytope.dimension;
-        state.planes = planes;
-        state.angles = new Array(planes.length).fill(0);
+        state.vertexCount = polytope.vertexCount;
+        state.planes = pairs;
+        state.planesFlat = flat;
+        state.angles = new Float32Array(pairs.length);
         state.projectionMatrix = buildProjectionMatrix(polytope.dimension);
-        state.renderScale = computeScale(polytope.dimension, shapeName);
-        state.selectedPlaneIdx = planes.length ? Math.min(state.selectedPlaneIdx, planes.length - 1) : 0;
+        state.renderScale = computeScale(polytope.dimension, shapeName) * viewportScaleFactor() * state.zoom;
+        state.selectedPlaneIdx = pairs.length ? Math.min(state.selectedPlaneIdx, pairs.length - 1) : 0;
+        if (glResources) {
+          uploadEdgeIndices(glResources, polytope.edges, state.vertexCount);
+        }
+        updateControlStates();
       }
 
       function clamp(value, min, max) {
@@ -277,7 +432,38 @@
       function resetToDefaults() {
         state.shapeIndex = 0;
         state.dimensionSetting = 3;
+        state.zoom = 1;
         rebuildState();
+      }
+
+      function cyclePlane(delta) {
+        if (!state.planes.length) return;
+        state.selectedPlaneIdx = (state.selectedPlaneIdx + delta + state.planes.length) % state.planes.length;
+      }
+
+      function zeroSelectedPlane() {
+        if (!state.planes.length) return;
+        state.angles[state.selectedPlaneIdx] = 0;
+      }
+
+      function resetAllAngles() {
+        if (!state.angles.length) return;
+        state.angles.fill(0);
+      }
+
+      function setRotationKey(key, isDown) {
+        if (isDown) {
+          state.keyState.add(key);
+        } else {
+          state.keyState.delete(key);
+        }
+      }
+
+      function adjustZoom(multiplier) {
+        const next = clamp(state.zoom * multiplier, ZOOM_BOUNDS.min, ZOOM_BOUNDS.max);
+        if (Math.abs(next - state.zoom) < 0.0001) return;
+        state.zoom = next;
+        updateRenderScaleForViewport();
       }
 
       function handleKeyDown(event) {
@@ -303,25 +489,20 @@
         }
         if (!state.planes.length) return;
         if (key === "ArrowUp") {
-          state.selectedPlaneIdx = (state.selectedPlaneIdx + 1) % state.planes.length;
+          cyclePlane(1);
         } else if (key === "ArrowDown") {
-          state.selectedPlaneIdx = (state.selectedPlaneIdx - 1 + state.planes.length) % state.planes.length;
+          cyclePlane(-1);
         } else if (key === "/" || key === "?") {
-          state.angles[state.selectedPlaneIdx] = 0;
+          zeroSelectedPlane();
         } else if (key === "r" || key === "R") {
-          state.angles.fill(0);
+          resetAllAngles();
         }
       }
 
       function handleKeyChange(event, isDown) {
-        const tracked = new Set(["ArrowLeft", "ArrowRight"]);
-        if (tracked.has(event.key)) {
-          if (isDown) {
-            state.keyState.add(event.key);
-          } else {
-            state.keyState.delete(event.key);
-          }
-        }
+        const tracked = event.key === "ArrowLeft" || event.key === "ArrowRight";
+        if (!tracked) return;
+        setRotationKey(event.key, isDown);
       }
 
       window.addEventListener("keydown", (event) => {
@@ -343,62 +524,380 @@
       }
 
       function renderHud() {
+        if (!state.polytope) return;
         const lines = [
           `shape ${state.shapeIndex + 1}/${CONFIG.shapes.length} = ${state.polytope.name}`,
-          `N=${state.dimension}  vertices=${state.polytope.vertices.length}  planes=${state.planes.length}`,
-          "TAB next  Shift+TAB prev  -/= change N",
+          `N=${state.dimension}  vertices=${state.vertexCount}  planes=${state.planes.length}`,
+          `zoom ${(state.zoom * 100).toFixed(0)}%`,
+          state.touchMode ? "Use the buttons below to change shapes and dimensions." : "TAB next  Shift+TAB prev  -/= change N",
         ];
         if (state.planes.length) {
           const plane = state.planes[state.selectedPlaneIdx];
           const angle = state.angles[state.selectedPlaneIdx] || 0;
           const angleDeg = ((angle * 180) / Math.PI + 360) % 360;
           lines.push(`Plane ${state.selectedPlaneIdx + 1}/${state.planes.length}: (${plane[0]}, ${plane[1]})  angle=${angleDeg.toFixed(1)}°`);
-          lines.push("↑/↓ plane  hold ←/→ rotate  / zero  R reset all");
+          lines.push(
+            state.touchMode
+              ? "Plane < or > select  hold rotate buttons to spin  Zero/Reset for cleanup"
+              : "↑/↓ plane  hold ←/→ rotate  / zero  R reset all"
+          );
         } else {
           lines.push("No rotation planes available for this dimension.");
         }
         hud.innerHTML = lines.map((line) => `<div>${line}</div>`).join("");
       }
 
-      function drawScene() {
-        ctx.fillStyle = CONFIG.background;
-        ctx.fillRect(0, 0, CONFIG.screenWidth, CONFIG.screenHeight);
-        if (!state.polytope) return;
-        const rotated = state.polytope.vertices.map((vertex) => rotatePoint(vertex, state.planes, state.angles));
-        const projected = rotated.map((vertex) => toScreen(projectPoint(vertex, state.projectionMatrix), state.renderScale));
-        const depths = rotated.map((vertex) => depthValue(vertex));
+      function rotateProjectWithWasm() {
+        if (!wasmSupport.ready || !state.polytope) return null;
+        return wasmSupport.rotate(
+          state.polytope.vertices,
+          state.planesFlat,
+          state.angles,
+          state.projectionMatrix,
+          state.dimension,
+          CONFIG.screenWidth / 2,
+          CONFIG.screenHeight / 2,
+          state.renderScale
+        );
+      }
 
-        const edgeDepth = (edge) => (depths[edge[0]] + depths[edge[1]]) / 2;
-        const sortedEdges = state.polytope.edges.slice().sort((a, b) => edgeDepth(a) - edgeDepth(b));
-
-        ctx.lineWidth = 2;
-        ctx.lineCap = "round";
-
-        for (const edge of sortedEdges) {
-          const depth = edgeDepth(edge);
-          const shade = clamp((depth + 2) / 4, 0, 1);
-          const color = CONFIG.edgeColor.map((component) => Math.round(component * shade));
-          ctx.strokeStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
-          const start = projected[edge[0]];
-          const end = projected[edge[1]];
-          ctx.beginPath();
-          ctx.moveTo(start[0], start[1]);
-          ctx.lineTo(end[0], end[1]);
-          ctx.stroke();
+      function rotateProjectFallback() {
+        if (!state.polytope) return null;
+        const { dimension, vertexCount, vertices } = state.polytope;
+        const buffer = new Float32Array(vertexCount * 3);
+        const coords = new Float32Array(dimension);
+        for (let v = 0; v < vertexCount; v++) {
+          const offset = v * dimension;
+          for (let d = 0; d < dimension; d++) {
+            coords[d] = vertices[offset + d];
+          }
+          for (let idx = 0; idx < state.planes.length; idx++) {
+            const angle = state.angles[idx];
+            if (!angle) continue;
+            const [i, j] = state.planes[idx];
+            const c = Math.cos(angle);
+            const s = Math.sin(angle);
+            const ci = coords[i] * c - coords[j] * s;
+            const cj = coords[i] * s + coords[j] * c;
+            coords[i] = ci;
+            coords[j] = cj;
+          }
+          let projX = 0;
+          let projY = 0;
+          for (let d = 0; d < dimension; d++) {
+            projX += coords[d] * state.projectionMatrix[d];
+            projY += coords[d] * state.projectionMatrix[dimension + d];
+          }
+          const screenX = CONFIG.screenWidth / 2 + projX * state.renderScale;
+          const screenY = CONFIG.screenHeight / 2 + projY * state.renderScale;
+          let depth = 0;
+          if (dimension <= 2) {
+            depth = coords[dimension - 1] ?? 0;
+          } else {
+            let sum = 0;
+            for (let d = 2; d < dimension; d++) sum += coords[d];
+            depth = sum / (dimension - 2);
+          }
+          const base = v * 3;
+          buffer[base] = screenX;
+          buffer[base + 1] = screenY;
+          buffer[base + 2] = depth;
         }
+        return buffer;
+      }
 
-        for (let i = 0; i < projected.length; i++) {
-          const depth = depths[i];
-          const shade = clamp((depth + 2) / 4, 0, 1);
-          const color = CONFIG.pointColor.map((component) => Math.round(component * shade));
-          ctx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
-          const [x, y] = projected[i];
-          ctx.beginPath();
-          ctx.arc(x, y, 4, 0, Math.PI * 2);
-          ctx.fill();
+      function drawScene() {
+        if (!state.polytope) return;
+
+        const frameBuffer = wasmSupport.ready ? rotateProjectWithWasm() : rotateProjectFallback();
+        if (!frameBuffer) return;
+
+        if (glResources) {
+          drawWebGL(glResources, frameBuffer);
+        } else if (ctx) {
+          drawCanvas2d(ctx, frameBuffer);
         }
 
         renderHud();
+      }
+
+      function drawCanvas2d(context, frameBuffer) {
+        context.fillStyle = CONFIG.background;
+        context.fillRect(0, 0, CONFIG.screenWidth, CONFIG.screenHeight);
+
+        const xAt = (idx) => frameBuffer[idx * 3];
+        const yAt = (idx) => frameBuffer[idx * 3 + 1];
+        const depthAt = (idx) => frameBuffer[idx * 3 + 2];
+
+        const sortedEdges = state.polytope.edges.slice().sort((a, b) => depthAt(a[0]) + depthAt(a[1]) - (depthAt(b[0]) + depthAt(b[1])));
+
+        context.lineWidth = 2;
+        context.lineCap = "round";
+
+        for (const edge of sortedEdges) {
+          const depth = (depthAt(edge[0]) + depthAt(edge[1])) / 2;
+          const shade = clamp((depth + 2) / 4, 0, 1);
+          const color = CONFIG.edgeColor.map((component) => Math.round(component * shade));
+          context.strokeStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+          context.beginPath();
+          context.moveTo(xAt(edge[0]), yAt(edge[0]));
+          context.lineTo(xAt(edge[1]), yAt(edge[1]));
+          context.stroke();
+        }
+
+        for (let i = 0; i < state.vertexCount; i++) {
+          const shade = clamp((depthAt(i) + 2) / 4, 0, 1);
+          const color = CONFIG.pointColor.map((component) => Math.round(component * shade));
+          context.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+          context.beginPath();
+          context.arc(xAt(i), yAt(i), 4, 0, Math.PI * 2);
+          context.fill();
+        }
+      }
+
+      function drawWebGL(resources, frameBuffer) {
+        const { gl, program, vertexBuffer, edgeIndexBuffer, attribPosition, attribShade, uniformBaseColor, uniformPointSize, indexCount, indexType } =
+          resources;
+
+        gl.viewport(0, 0, CONFIG.screenWidth, CONFIG.screenHeight);
+        gl.clearColor(8 / 255, 10 / 255, 18 / 255, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        updateVertexBuffer(resources, frameBuffer);
+
+        gl.useProgram(program);
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+        gl.enableVertexAttribArray(attribPosition);
+        gl.vertexAttribPointer(attribPosition, 3, gl.FLOAT, false, 16, 0);
+        gl.enableVertexAttribArray(attribShade);
+        gl.vertexAttribPointer(attribShade, 1, gl.FLOAT, false, 16, 12);
+
+        if (indexCount > 0) {
+          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, edgeIndexBuffer);
+          gl.uniform3fv(uniformBaseColor, normalizeColor(CONFIG.edgeColor));
+          gl.uniform1f(uniformPointSize, 1.0);
+          gl.drawElements(gl.LINES, indexCount, indexType, 0);
+        }
+
+        gl.uniform3fv(uniformBaseColor, normalizeColor(CONFIG.pointColor));
+        gl.uniform1f(uniformPointSize, 6.0);
+        gl.drawArrays(gl.POINTS, 0, state.vertexCount);
+      }
+
+      function updateVertexBuffer(resources, frameBuffer) {
+        const { gl, vertexBuffer } = resources;
+        const count = state.vertexCount;
+        const stride = 4; // x, y, z, shade
+        if (resources.vertexData.length !== count * stride) {
+          resources.vertexData = new Float32Array(count * stride);
+        }
+        const halfW = CONFIG.screenWidth / 2;
+        const halfH = CONFIG.screenHeight / 2;
+        for (let i = 0; i < count; i++) {
+          const base = i * 3;
+          const x = frameBuffer[base];
+          const y = frameBuffer[base + 1];
+          const depth = frameBuffer[base + 2];
+          const shade = clamp((depth + 2) / 4, 0, 1);
+          const xClip = x / halfW - 1;
+          const yClip = 1 - y / halfH;
+          const zClip = shade * 2 - 1;
+          const offset = i * stride;
+          resources.vertexData[offset] = xClip;
+          resources.vertexData[offset + 1] = yClip;
+          resources.vertexData[offset + 2] = zClip;
+          resources.vertexData[offset + 3] = shade;
+        }
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, resources.vertexData, gl.DYNAMIC_DRAW);
+      }
+
+      function normalizeColor(color) {
+        return new Float32Array([color[0] / 255, color[1] / 255, color[2] / 255]);
+      }
+
+      function initWebGL(gl) {
+        const isWebGL2 = typeof WebGL2RenderingContext !== "undefined" && gl instanceof WebGL2RenderingContext;
+        const supportsUint32 = isWebGL2 || !!gl.getExtension("OES_element_index_uint");
+
+        const vertexSource = `
+          attribute vec3 aPosition;
+          attribute float aShade;
+          varying float vShade;
+          uniform float uPointSize;
+          void main() {
+            gl_Position = vec4(aPosition, 1.0);
+            gl_PointSize = uPointSize;
+            vShade = clamp(aShade, 0.0, 1.0);
+          }
+        `;
+
+        const fragmentSource = `
+          precision mediump float;
+          varying float vShade;
+          uniform vec3 uBaseColor;
+          void main() {
+            gl_FragColor = vec4(uBaseColor * vShade, 1.0);
+          }
+        `;
+
+        const program = createProgram(gl, vertexSource, fragmentSource);
+
+        const attribPosition = gl.getAttribLocation(program, "aPosition");
+        const attribShade = gl.getAttribLocation(program, "aShade");
+        const uniformBaseColor = gl.getUniformLocation(program, "uBaseColor");
+        const uniformPointSize = gl.getUniformLocation(program, "uPointSize");
+
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.LEQUAL);
+        gl.clearDepth(1.0);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+        const vertexBuffer = gl.createBuffer();
+        const edgeIndexBuffer = gl.createBuffer();
+
+        return {
+          gl,
+          program,
+          attribPosition,
+          attribShade,
+          uniformBaseColor,
+          uniformPointSize,
+          vertexBuffer,
+          edgeIndexBuffer,
+          supportsUint32,
+          indexCount: 0,
+          indexType: gl.UNSIGNED_SHORT,
+          vertexData: new Float32Array(0),
+        };
+      }
+
+      function createProgram(gl, vertexSource, fragmentSource) {
+        const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
+        const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+          throw new Error(`WebGL program link failed: ${gl.getProgramInfoLog(program)}`);
+        }
+        return program;
+      }
+
+      function compileShader(gl, type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+          throw new Error(`WebGL shader compile error: ${gl.getShaderInfoLog(shader)}`);
+        }
+        return shader;
+      }
+
+      function uploadEdgeIndices(resources, edges, vertexCount) {
+        const { gl, supportsUint32, edgeIndexBuffer } = resources;
+        if (!edges.length) {
+          resources.indexCount = 0;
+          return;
+        }
+        const maxIndex = vertexCount - 1;
+        const useUint32 = supportsUint32 && maxIndex > 65535;
+        if (maxIndex > 65535 && !useUint32) {
+          console.warn("WebGL implementation lacks Uint32 indices; edges beyond 65k vertices may be truncated.");
+        }
+        const IndexArray = useUint32 ? Uint32Array : Uint16Array;
+        const typed = new IndexArray(edges.length * 2);
+        for (let i = 0; i < edges.length; i++) {
+          typed[i * 2] = edges[i][0];
+          typed[i * 2 + 1] = edges[i][1];
+        }
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, edgeIndexBuffer);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, typed, gl.STATIC_DRAW);
+        resources.indexCount = typed.length;
+        resources.indexType = useUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+      }
+
+      function resizeCanvas() {
+        const cssWidth = canvas.clientWidth || BASE_CANVAS_WIDTH;
+        const cssHeight = canvas.clientHeight || (cssWidth * BASE_CANVAS_HEIGHT) / BASE_CANVAS_WIDTH;
+        const pixelRatio = window.devicePixelRatio || 1;
+        const displayWidth = Math.round(cssWidth * pixelRatio);
+        const displayHeight = Math.round(cssHeight * pixelRatio);
+        if (canvas.width === displayWidth && canvas.height === displayHeight) {
+          return;
+        }
+        canvas.width = displayWidth;
+        canvas.height = displayHeight;
+        CONFIG.screenWidth = displayWidth;
+        CONFIG.screenHeight = displayHeight;
+        if (gl) {
+          gl.viewport(0, 0, displayWidth, displayHeight);
+        }
+        updateRenderScaleForViewport();
+      }
+
+      function setupButtonControls() {
+        const buttons = document.querySelectorAll("[data-action]");
+        buttons.forEach((button) => {
+          button.setAttribute("type", "button");
+          const action = button.dataset.action;
+          buttonRefs[action] = button;
+          if (action === "rotate-left" || action === "rotate-right") {
+            const key = action === "rotate-left" ? "ArrowLeft" : "ArrowRight";
+            bindRotateButton(button, key);
+            return;
+          }
+          const handler = ACTION_HANDLERS[action];
+          if (!handler) return;
+          button.addEventListener("click", (event) => {
+            event.preventDefault();
+            handler();
+          });
+        });
+        updateControlStates();
+      }
+
+      function bindRotateButton(button, key) {
+        const activate = () => {
+          if (!state.planes.length) return;
+          setRotationKey(key, true);
+          button.classList.add("active");
+        };
+        const deactivate = () => {
+          setRotationKey(key, false);
+          button.classList.remove("active");
+        };
+        const releasePointer = (event) => {
+          if (event && event.pointerId !== undefined && button.hasPointerCapture?.(event.pointerId)) {
+            button.releasePointerCapture(event.pointerId);
+          }
+          deactivate();
+        };
+        button.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          button.setPointerCapture?.(event.pointerId);
+          activate();
+        });
+        button.addEventListener("pointerup", releasePointer);
+        button.addEventListener("pointercancel", releasePointer);
+        button.addEventListener("pointerleave", () => deactivate());
+        button.addEventListener("lostpointercapture", () => deactivate());
+        rotationButtonBindings.push({ button, deactivate });
+      }
+
+      function updateControlStates() {
+        const hasPlanes = state.planes.length > 0;
+        const planeDependent = ["plane-prev", "plane-next", "plane-zero", "reset-angles"];
+        planeDependent.forEach((action) => {
+          const btn = buttonRefs[action];
+          if (btn) btn.disabled = !hasPlanes;
+        });
+        rotationButtonBindings.forEach(({ button, deactivate }) => {
+          if (!hasPlanes) deactivate();
+          button.disabled = !hasPlanes;
+        });
       }
 
       function loop(timestamp) {
@@ -409,12 +908,26 @@
         requestAnimationFrame(loop);
       }
 
-      rebuildState();
-      renderHud();
-      requestAnimationFrame((ts) => {
-        state.lastTime = ts;
-        loop(ts);
-      });
+      async function bootstrap() {
+        try {
+          const wasmModule = await import("./pkg/projection_wasm.js");
+          await wasmModule.default();
+          wasmSupport.ready = true;
+          wasmSupport.rotate = wasmModule.rotate_project;
+          console.info("WebAssembly acceleration enabled.");
+        } catch (error) {
+          console.warn("Falling back to pure JS projection", error);
+        }
+
+        rebuildState();
+        renderHud();
+        requestAnimationFrame((ts) => {
+          state.lastTime = ts;
+          loop(ts);
+        });
+      }
+
+      bootstrap();
     </script>
   </body>
 </html>

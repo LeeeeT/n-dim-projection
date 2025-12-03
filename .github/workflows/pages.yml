@@ -21,6 +21,13 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v4
 
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.3.0
+
+      - name: Build WebAssembly bundle
+        working-directory: wasm
+        run: wasm-pack build --release --target web --out-dir ../pkg
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
