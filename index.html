@@ -54,6 +54,19 @@
         flex-direction: column;
         gap: 8px;
       }
+      .canvas-pan {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+      }
+      .canvas-pan-row {
+        display: flex;
+        gap: 6px;
+      }
       .canvas-btn {
         width: 40px;
         height: 40px;
@@ -68,6 +81,23 @@
       }
       .canvas-btn:active {
         transform: scale(0.96);
+        background: rgba(14, 19, 34, 0.95);
+      }
+      .canvas-pan button {
+        width: 38px;
+        height: 38px;
+        border-radius: 8px;
+        border: 1px solid #27304b;
+        background: rgba(8, 12, 25, 0.85);
+        color: var(--hud-text);
+        font: inherit;
+        font-size: 0.95rem;
+        cursor: pointer;
+        backdrop-filter: blur(4px);
+        transition: transform 0.1s ease, background 0.2s ease;
+      }
+      .canvas-pan button:active {
+        transform: scale(0.97);
         background: rgba(14, 19, 34, 0.95);
       }
       canvas {
@@ -137,6 +167,15 @@
           width: 34px;
           height: 34px;
         }
+        .canvas-pan {
+          top: 10px;
+          left: 10px;
+          gap: 4px;
+        }
+        .canvas-pan button {
+          width: 32px;
+          height: 32px;
+        }
       }
     </style>
   </head>
@@ -145,6 +184,14 @@
       <h1 class="title">N-Dimensional Projection</h1>
       <div class="canvas-shell">
         <canvas id="projection" width="960" height="720"></canvas>
+        <div class="canvas-pan" aria-label="Pan viewport">
+          <button data-action="pan-up" title="Pan up">&#8593;</button>
+          <div class="canvas-pan-row">
+            <button data-action="pan-left" title="Pan left">&#8592;</button>
+            <button data-action="pan-right" title="Pan right">&#8594;</button>
+          </div>
+          <button data-action="pan-down" title="Pan down">&#8595;</button>
+        </div>
         <div class="canvas-toolbar" aria-label="Canvas controls">
           <button class="canvas-btn" data-action="zoom-in" title="Zoom in">+</button>
           <button class="canvas-btn" data-action="zoom-out" title="Zoom out">-</button>
@@ -182,6 +229,14 @@
       const BASE_CANVAS_HEIGHT = 720;
       const buttonRefs = {};
       const rotationButtonBindings = [];
+      const continuousInputs = {
+        zoomIn: false,
+        zoomOut: false,
+        panUp: false,
+        panDown: false,
+        panLeft: false,
+        panRight: false,
+      };
       const pointerQuery = window.matchMedia ? window.matchMedia("(pointer: coarse)") : null;
 
       const ACTION_HANDLERS = {
@@ -194,10 +249,7 @@
         "plane-zero": () => zeroSelectedPlane(),
         "reset-angles": () => resetAllAngles(),
         "reset-defaults": () => resetToDefaults(),
-        "zoom-in": () => adjustZoom(1.15),
-        "zoom-out": () => adjustZoom(1 / 1.15),
       };
-      const ZOOM_BOUNDS = { min: 0.35, max: 4 };
 
       const wasmSupport = {
         ready: false,
@@ -220,6 +272,8 @@
         lastTime: performance.now(),
         touchMode: pointerQuery ? pointerQuery.matches : false,
         zoom: 1,
+        panX: 0,
+        panY: 0,
       };
 
       const canvas = document.getElementById("projection");
@@ -252,6 +306,23 @@
           });
         }
       });
+      canvas.addEventListener(
+        "wheel",
+        (event) => {
+          event.preventDefault();
+          if (document.activeElement !== canvas) return;
+          const delta = Math.sign(event.deltaY);
+          if (delta === 0) return;
+          const factor = 1 + Math.min(Math.abs(event.deltaY), 400) * 0.0015;
+          if (delta > 0) {
+            adjustZoom(1 / factor);
+          } else {
+            adjustZoom(factor);
+          }
+        },
+        { passive: false }
+      );
+      canvas.setAttribute("tabindex", "0");
 
       function canonicalShapeName(name) {
         return name === "tetra" ? "simplex" : name;
@@ -435,6 +506,8 @@
         state.shapeIndex = 0;
         state.dimensionSetting = 3;
         state.zoom = 1;
+        state.panX = 0;
+        state.panY = 0;
         rebuildState();
       }
 
@@ -462,15 +535,28 @@
       }
 
       function adjustZoom(multiplier) {
-        const next = clamp(state.zoom * multiplier, ZOOM_BOUNDS.min, ZOOM_BOUNDS.max);
+        const next = state.zoom * multiplier;
+        if (!Number.isFinite(next) || next <= 0) return;
         if (Math.abs(next - state.zoom) < 0.0001) return;
+        const ratio = next / state.zoom;
         state.zoom = next;
+        state.panX *= ratio;
+        state.panY *= ratio;
         updateRenderScaleForViewport();
+      }
+
+      function panStep() {
+        return 500;
+      }
+
+      function adjustPan(dx, dy) {
+        state.panX -= dx;
+        state.panY -= dy;
       }
 
       function handleKeyDown(event) {
         const key = event.key;
-        const needsPrevent = ["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key);
+        const needsPrevent = ["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "w", "a", "s", "d", "W", "A", "S", "D"].includes(key);
         if (needsPrevent) event.preventDefault();
         if (key === "Tab") {
           const delta = event.shiftKey ? -1 : 1;
@@ -499,12 +585,21 @@
         } else if (key === "r" || key === "R") {
           resetAllAngles();
         }
+        if (key === "w" || key === "W") continuousInputs.panUp = true;
+        if (key === "s" || key === "S") continuousInputs.panDown = true;
+        if (key === "a" || key === "A") continuousInputs.panLeft = true;
+        if (key === "d" || key === "D") continuousInputs.panRight = true;
       }
 
       function handleKeyChange(event, isDown) {
-        const tracked = event.key === "ArrowLeft" || event.key === "ArrowRight";
-        if (!tracked) return;
-        setRotationKey(event.key, isDown);
+        const key = event.key;
+        if (key === "ArrowLeft" || key === "ArrowRight") {
+          setRotationKey(key, isDown);
+        }
+        if (key === "w" || key === "W") continuousInputs.panUp = isDown;
+        if (key === "s" || key === "S") continuousInputs.panDown = isDown;
+        if (key === "a" || key === "A") continuousInputs.panLeft = isDown;
+        if (key === "d" || key === "D") continuousInputs.panRight = isDown;
       }
 
       window.addEventListener("keydown", (event) => {
@@ -523,6 +618,18 @@
         if (state.keyState.has("ArrowRight")) {
           state.angles[state.selectedPlaneIdx] = (state.angles[state.selectedPlaneIdx] + increment) % (Math.PI * 2);
         }
+        const zoomSpeed = 1 + dt * 1.2;
+        if (continuousInputs.zoomIn) {
+          adjustZoom(zoomSpeed);
+        }
+        if (continuousInputs.zoomOut) {
+          adjustZoom(1 / zoomSpeed);
+        }
+        const panDistance = panStep() * dt;
+        if (continuousInputs.panUp) adjustPan(0, -panDistance);
+        if (continuousInputs.panDown) adjustPan(0, panDistance);
+        if (continuousInputs.panLeft) adjustPan(-panDistance, 0);
+        if (continuousInputs.panRight) adjustPan(panDistance, 0);
       }
 
       function renderHud() {
@@ -531,7 +638,7 @@
           `shape ${state.shapeIndex + 1}/${CONFIG.shapes.length} = ${state.polytope.name}`,
           `N=${state.dimension}  vertices=${state.vertexCount}  planes=${state.planes.length}`,
           `zoom ${(state.zoom * 100).toFixed(0)}%`,
-          state.touchMode ? "Use the buttons below to change shapes and dimensions." : "TAB next  Shift+TAB prev  -/= change N",
+          state.touchMode ? "Use on-screen controls plus the left pad to pan and right buttons to zoom." : "TAB next  Shift+TAB prev  -/= change N",
         ];
         if (state.planes.length) {
           const plane = state.planes[state.selectedPlaneIdx];
@@ -625,8 +732,10 @@
         context.fillStyle = CONFIG.background;
         context.fillRect(0, 0, CONFIG.screenWidth, CONFIG.screenHeight);
 
-        const xAt = (idx) => frameBuffer[idx * 3];
-        const yAt = (idx) => frameBuffer[idx * 3 + 1];
+        const panX = state.panX;
+        const panY = state.panY;
+        const xAt = (idx) => frameBuffer[idx * 3] + panX;
+        const yAt = (idx) => frameBuffer[idx * 3 + 1] + panY;
         const depthAt = (idx) => frameBuffer[idx * 3 + 2];
 
         const sortedEdges = state.polytope.edges.slice().sort((a, b) => depthAt(a[0]) + depthAt(a[1]) - (depthAt(b[0]) + depthAt(b[1])));
@@ -645,12 +754,13 @@
           context.stroke();
         }
 
+        const pointRadius = 4;
         for (let i = 0; i < state.vertexCount; i++) {
           const shade = clamp((depthAt(i) + 2) / 4, 0, 1);
           const color = CONFIG.pointColor.map((component) => Math.round(component * shade));
           context.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
           context.beginPath();
-          context.arc(xAt(i), yAt(i), 4, 0, Math.PI * 2);
+          context.arc(xAt(i), yAt(i), pointRadius, 0, Math.PI * 2);
           context.fill();
         }
       }
@@ -693,10 +803,12 @@
         }
         const halfW = CONFIG.screenWidth / 2;
         const halfH = CONFIG.screenHeight / 2;
+        const panX = state.panX;
+        const panY = state.panY;
         for (let i = 0; i < count; i++) {
           const base = i * 3;
-          const x = frameBuffer[base];
-          const y = frameBuffer[base + 1];
+          const x = frameBuffer[base] + panX;
+          const y = frameBuffer[base + 1] + panY;
           const depth = frameBuffer[base + 2];
           const shade = clamp((depth + 2) / 4, 0, 1);
           const xClip = x / halfW - 1;
@@ -849,6 +961,17 @@
             bindRotateButton(button, key);
             return;
           }
+          if (action === "zoom-in" || action === "zoom-out") {
+            bindContinuousButton(button, {
+              flagKey: action === "zoom-in" ? "zoomIn" : "zoomOut",
+            });
+            return;
+          }
+          if (action === "pan-up" || action === "pan-down" || action === "pan-left" || action === "pan-right") {
+            const flagKey = action === "pan-up" ? "panUp" : action === "pan-down" ? "panDown" : action === "pan-left" ? "panLeft" : "panRight";
+            bindContinuousButton(button, { flagKey });
+            return;
+          }
           const handler = ACTION_HANDLERS[action];
           if (!handler) return;
           button.addEventListener("click", (event) => {
@@ -898,6 +1021,34 @@
           if (!hasPlanes) deactivate();
           button.disabled = !hasPlanes;
         });
+      }
+
+      function bindContinuousButton(button, options) {
+        const { flagKey, onStart } = options;
+        const activate = () => {
+          continuousInputs[flagKey] = true;
+          button.classList.add("active");
+          onStart?.();
+        };
+        const deactivate = () => {
+          continuousInputs[flagKey] = false;
+          button.classList.remove("active");
+        };
+        const releasePointer = (event) => {
+          if (event && event.pointerId !== undefined && button.hasPointerCapture?.(event.pointerId)) {
+            button.releasePointerCapture(event.pointerId);
+          }
+          deactivate();
+        };
+        button.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          button.setPointerCapture?.(event.pointerId);
+          activate();
+        });
+        button.addEventListener("pointerup", releasePointer);
+        button.addEventListener("pointercancel", releasePointer);
+        button.addEventListener("pointerleave", () => deactivate());
+        button.addEventListener("lostpointercapture", () => deactivate());
       }
 
       function loop(timestamp) {

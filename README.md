@@ -9,20 +9,24 @@ Interactive orthographic projection of high-dimensional cubes and simplices, rew
 - **HUD overlay** that surfaces the current shape, dimension, vertex count, plane selection, and control cheatsheet.
 - **WebGL renderer** that draws edges/vertices via GPU vertex buffers for a ~20× faster draw stage, with Canvas 2D as a graceful fallback.
 - **WebAssembly acceleration**: a Rust core (via `wasm-pack`) handles the rotation/projection pipeline with automatic JS fallback when the module is unavailable.
-- **Responsive UI & touch controls**: the canvas/HUD scale down for phones and tablets, and every keyboard shortcut is mirrored by on-screen buttons for touch-only devices.
+- **Responsive UI & touch controls**: the canvas/HUD scale down for phones and tablets, every keyboard shortcut is mirrored by on-screen buttons, and dedicated on-canvas pads handle zooming and panning when you do not have a keyboard or mouse.
 
 ## Controls
 | Action | Keys |
 | --- | --- |
-| Next/previous shape | `TAB` / `Shift + TAB` |
-| Increase/decrease dimension | `=` / `-` |
-| Cycle active rotation plane | `↑` / `↓` |
-| Rotate active plane | hold `←` / `→` |
+| Next/previous shape | `TAB` / `Shift + TAB` or on-canvas Shape buttons |
+| Increase/decrease dimension | `=` / `-` or on-canvas `N +/-` |
+| Cycle active rotation plane | `↑` / `↓` or Plane buttons |
+| Rotate active plane | hold `←` / `→` or Rotate buttons |
 | Reset active plane angle | `/` |
 | Reset all angles | `R` |
 | Restore defaults | `Esc` |
+| Pan viewport | `W`/`A`/`S`/`D`, on-canvas pad, or touch dragging |
+| Zoom viewport | Mouse wheel (canvas focused) or +/- on-canvas buttons |
 
-> On touch devices, use the on-screen buttons (Shape </>, N +/-, Plane </>, Rotate </>, Zero, Reset, Defaults) directly beneath the canvas to trigger the same actions without a keyboard.
+> On touch devices, use the on-screen buttons (Shape </>, N +/-, Plane </>, Rotate </>, Zero, Reset, Defaults) beneath the canvas plus the left pad (pan) and right +/- buttons (zoom) that sit on top of the canvas to trigger the same actions without a keyboard.
+
+When the canvas has keyboard focus, the mouse wheel zooms smoothly toward the canvas center and WASD pans at a constant screen-space speed, matching the feel of the touch buttons.
 
 ## Running Locally
 1. **Build the WebAssembly module (optional but recommended):** Install [Rust](https://www.rust-lang.org/tools/install) and [`wasm-pack`](https://rustwasm.github.io/wasm-pack/installer/), then run:
