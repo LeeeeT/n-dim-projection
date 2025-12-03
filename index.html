@@ -210,6 +210,7 @@
         <button data-action="plane-zero">Zero plane</button>
         <button data-action="reset-angles">Reset angles</button>
         <button data-action="reset-defaults">Defaults</button>
+        <button data-action="auto-rotate-toggle">Auto rotate</button>
       </div>
     </div>
     <script type="module">
@@ -223,6 +224,7 @@
         simplexBaseScale: 350,
         orthoplexBaseScale: 300,
         manualRotationSpeed: 1.6,
+        autoRotateSpeed: 1.6,
         shapes: ["cube", "simplex", "orthoplex"],
       };
 
@@ -250,6 +252,7 @@
         "plane-zero": () => zeroSelectedPlane(),
         "reset-angles": () => resetAllAngles(),
         "reset-defaults": () => resetToDefaults(),
+        "auto-rotate-toggle": () => toggleAutoRotate(),
       };
 
       const wasmSupport = {
@@ -276,6 +279,8 @@
         zoom: 1,
         panX: 0,
         panY: 0,
+        autoRotateEnabled: false,
+        autoRotateSpeeds: new Float32Array(),
       };
 
       const canvas = document.getElementById("projection");
@@ -577,6 +582,14 @@
         state.projectionMatrix = buildProjectionMatrix(polytope.dimension);
         state.renderScale = computeScale(polytope.dimension, shapeName) * viewportScaleFactor() * state.zoom;
         state.selectedPlaneIdx = pairs.length ? Math.min(state.selectedPlaneIdx, pairs.length - 1) : 0;
+        if (!pairs.length) {
+          state.autoRotateEnabled = false;
+          state.autoRotateSpeeds = new Float32Array();
+        } else if (state.autoRotateEnabled) {
+          reseedAutoRotateSpeeds();
+        } else {
+          state.autoRotateSpeeds = new Float32Array(pairs.length);
+        }
         if (glResources) {
           uploadEdgeIndices(glResources, polytope.edgeIndices, state.vertexCount);
         }
@@ -603,6 +616,8 @@
         state.zoom = 1;
         state.panX = 0;
         state.panY = 0;
+        state.autoRotateEnabled = false;
+        state.autoRotateSpeeds = new Float32Array();
         rebuildState();
       }
 
@@ -619,6 +634,61 @@
       function resetAllAngles() {
         if (!state.angles.length) return;
         state.angles.fill(0);
+      }
+
+      function buildAutoRotateSpeeds(count) {
+        if (!count) return new Float32Array();
+        const total = Math.max(0, CONFIG.autoRotateSpeed || 0);
+        const speeds = new Float32Array(count);
+        if (!Number.isFinite(total) || total <= 0) {
+          return speeds;
+        }
+        const weights = new Array(count);
+        let weightSum = 0;
+        for (let i = 0; i < count; i++) {
+          const weight = Math.random();
+          weights[i] = weight;
+          weightSum += weight;
+        }
+        if (weightSum === 0) {
+          weights.fill(1);
+          weightSum = count;
+        }
+        for (let i = 0; i < count; i++) {
+          const magnitude = (weights[i] / weightSum) * total;
+          const direction = Math.random() < 0.5 ? -1 : 1;
+          speeds[i] = magnitude * direction;
+        }
+        return speeds;
+      }
+
+      function reseedAutoRotateSpeeds() {
+        state.autoRotateSpeeds = buildAutoRotateSpeeds(state.planes.length);
+      }
+
+      function toggleAutoRotate() {
+        if (!state.planes.length) return;
+        state.autoRotateEnabled = !state.autoRotateEnabled;
+        if (state.autoRotateEnabled) {
+          reseedAutoRotateSpeeds();
+        } else {
+          state.autoRotateSpeeds = new Float32Array(state.planes.length);
+        }
+        updateAutoRotateButton();
+      }
+
+      function updateAutoRotateButton() {
+        const button = buttonRefs["auto-rotate-toggle"];
+        if (!button) return;
+        if (!state.planes.length) {
+          state.autoRotateEnabled = false;
+        }
+        button.textContent = state.autoRotateEnabled ? "Stop auto rotate" : "Start auto rotate";
+        if (state.autoRotateEnabled) {
+          button.classList.add("active");
+        } else {
+          button.classList.remove("active");
+        }
       }
 
       function setRotationKey(key, isDown) {
@@ -713,6 +783,17 @@
         if (state.keyState.has("ArrowRight")) {
           state.angles[state.selectedPlaneIdx] = (state.angles[state.selectedPlaneIdx] + increment) % (Math.PI * 2);
         }
+        if (state.autoRotateEnabled) {
+          if (state.autoRotateSpeeds.length !== state.planes.length) {
+            reseedAutoRotateSpeeds();
+          }
+          const fullTurn = Math.PI * 2;
+          for (let i = 0; i < state.angles.length; i++) {
+            const speed = state.autoRotateSpeeds[i];
+            if (!speed) continue;
+            state.angles[i] = (state.angles[i] + speed * dt) % fullTurn;
+          }
+        }
         const zoomSpeed = 1 + dt * 1.2;
         if (continuousInputs.zoomIn) {
           adjustZoom(zoomSpeed);
@@ -743,6 +824,7 @@
           if (!state.touchMode) {
             lines.push("↑/↓ plane  hold ←/→ rotate  / zero  R reset all");
           }
+          lines.push(state.autoRotateEnabled ? "Auto rotate: ON (random plane speeds)" : "Auto rotate: OFF");
         } else {
           lines.push("No rotation planes available for this dimension.");
         }
@@ -1124,6 +1206,14 @@
           if (!hasPlanes) deactivate();
           button.disabled = !hasPlanes;
         });
+        const autoRotateBtn = buttonRefs["auto-rotate-toggle"];
+        if (autoRotateBtn) {
+          autoRotateBtn.disabled = !hasPlanes;
+          if (!hasPlanes) {
+            autoRotateBtn.classList.remove("active");
+          }
+          updateAutoRotateButton();
+        }
       }
 
       function bindContinuousButton(button, options) {
